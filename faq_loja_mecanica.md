@@ -251,3 +251,47 @@ Consulte nossa equipe para verificar as marcas para as quais somos autorizados. 
 ---
 
 *Não encontrou sua dúvida? Fale com nossa equipe pelo WhatsApp ou visite nossa loja — ficaremos felizes em ajudar!* 🔧
+
+---
+
+## 📱 Consulta de Status — Ordem de Serviço (OS)
+
+**Como faço para saber se meu equipamento já está pronto?**
+Você pode consultar o status diretamente aqui no chat! Basta informar:
+
+* O **número da sua OS** (ex: *OS-2026-0001*) — está no comprovante de entrega, ou
+* O **telefone cadastrado** na oficina no momento da entrega do equipamento
+
+O sistema consulta em tempo real e te avisa sobre o status atual.
+
+---
+
+**Quais são os possíveis status da minha OS?**
+Após entregar o equipamento, ele passa pelos seguintes estágios:
+
+* **Recebido** — Equipamento recebido, aguardando diagnóstico
+* **Em diagnóstico** — Técnico analisando o problema
+* **Aguardando aprovação** — Orçamento pronto, aguardando sua confirmação para iniciar o reparo
+* **Aguardando peças** — Reparo aprovado, aguardando chegada das peças necessárias
+* **Em reparo** — Conserto em andamento
+* **Pronto para retirada** — Equipamento pronto! Pode vir buscar no horário comercial
+* **Entregue** — Equipamento já retirado pelo cliente
+
+---
+
+**O bot pode consultar meu status diretamente?**
+Sim! Se você mencionar palavras como "status", "pronto", "meu equipamento", "cadê minha roçadeira" e similares, o sistema busca automaticamente no nosso banco de dados usando seu telefone ou número de OS.
+
+Exemplos de mensagens que ativam a consulta:
+> "Minha motosserra já ficou pronta?"
+> "Qual o status da OS-2026-0003?"
+> "Quando posso buscar meu cortador?"
+
+---
+
+**Não lembro meu número de OS. O que faço?**
+Informe o **telefone** que você usou ao cadastrar o equipamento na oficina. O sistema localiza sua OS automaticamente pelo número de telefone.
+
+---
+
+*Dúvidas sobre o reparo ou prazo? Nossos atendentes estão disponíveis de segunda a sexta das 8h às 18h e sábados das 8h às 12h.* 🔧
