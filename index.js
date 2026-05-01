@@ -5,7 +5,6 @@ import { fileURLToPath } from "url";
 import OpenAI from "openai";
 import axios from "axios";
 import dotenv from "dotenv";
-
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,7 +27,6 @@ if (!CHATWOOT_ACCOUNT_ID || !CHATWOOT_BOT_TOKEN) {
     console.error("Faltam variaveis: CHATWOOT_ACCOUNT_ID, CHATWOOT_BOT_TOKEN");
     process.exit(1);
 }
-
 if (!OPENAI_API_KEY) {
     console.warn("OPENAI_API_KEY nao configurada - bot fara handoff de tudo.");
 }
@@ -114,15 +112,14 @@ function extractPhone(text) {
 function getContactPhone(body) {
     const phone =
         body?.conversation?.meta?.sender?.phone_number ||
-        body?.conversation?.contact_inbox?.contact?.phone_number ||
-        "";
+        body?.conversation?.contact_inbox?.contact?.phone_number || "";
     return phone.replace(/\D/g, "");
 }
 
 async function consultarStatusCRM(identifier, type = "telefone") {
     try {
-        const url = `${OFICINA_CRM_URL}/api/chatbot/status?${type}=${encodeURIComponent(identifier)}`;
-        console.log(`[CRM] Consultando: ${url}`);
+        const url = OFICINA_CRM_URL + "/api/chatbot/status?" + type + "=" + encodeURIComponent(identifier);
+        console.log("[CRM] Consultando: " + url);
         const response = await axios.get(url, { timeout: 10000 });
         return response.data;
     } catch (err) {
@@ -130,6 +127,9 @@ async function consultarStatusCRM(identifier, type = "telefone") {
         return null;
     }
 }
+
+// Mapa para rastrear conversas aguardando identificador (telefone ou OS)
+const pendingCrmConversations = new Map();
 
 function shouldHandoff(text) {
     const t = (text || "").toLowerCase();
@@ -176,13 +176,12 @@ app.get("/healthz", (_, res) => res.json({ ok: true }));
 app.post("/webhook", async (req, res) => {
     if (CHATWOOT_WEBHOOK_TOKEN) {
         const t = req.headers["x-chatwoot-token"] || req.query.token;
-        if (t !== CHATWOOT_WEBHOOK_TOKEN)
-            return res.status(401).json({ error: "invalid token" });
+        if (t !== CHATWOOT_WEBHOOK_TOKEN) return res.status(401).json({ error: "invalid token" });
     }
+
     res.status(200).json({ received: true });
 
-    const { event, message_type, private: isPrivate, content, conversation } =
-        req.body || {};
+    const { event, message_type, private: isPrivate, content, conversation } = req.body || {};
 
     try {
         if (event !== "message_created") return;
@@ -214,6 +213,28 @@ app.post("/webhook", async (req, res) => {
             return;
         }
 
+        // Verifica se esta conversa esta aguardando um identificador (telefone ou OS)
+        if (pendingCrmConversations.has(conversationId)) {
+            pendingCrmConversations.delete(conversationId);
+            const osNumber = extractOsNumber(userText);
+            const phone = extractPhone(userText);
+            if (osNumber) {
+                const crm = await consultarStatusCRM(osNumber, "numero_os");
+                if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
+            }
+            if (phone) {
+                const crm = await consultarStatusCRM(phone, "telefone");
+                if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
+            }
+            await sendMessage(
+                conversationId,
+                "Nao consegui localizar sua OS com essa informacao. " +
+                "Por favor, informe o numero da OS (ex: OS-2026-0001) ou o telefone cadastrado na oficina."
+            );
+            pendingCrmConversations.set(conversationId, Date.now());
+            return;
+        }
+
         if (isOsQuery(userText)) {
             const osNumber = extractOsNumber(userText);
             if (osNumber) {
@@ -230,6 +251,7 @@ app.post("/webhook", async (req, res) => {
                 const crm = await consultarStatusCRM(phoneFromContact, "telefone");
                 if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
             }
+            pendingCrmConversations.set(conversationId, Date.now());
             await sendMessage(
                 conversationId,
                 "Para consultar o status do seu equipamento, me informe o numero da sua OS " +
