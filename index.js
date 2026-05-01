@@ -21,6 +21,7 @@ const {
     OPENAI_MODEL = "gpt-4o-mini",
     COMPANY_NAME = "Nossa empresa",
     HANDOFF_KEYWORDS = "atendente,humano,pessoa,suporte humano,falar com alguem",
+    OFICINA_CRM_URL = "https://oficina-crm.onrender.com",
 } = process.env;
 
 if (!CHATWOOT_ACCOUNT_ID || !CHATWOOT_BOT_TOKEN) {
@@ -34,13 +35,19 @@ if (!OPENAI_API_KEY) {
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-const FAQ_PATH = path.join(__dirname, "faq.md");
+const FAQ_PATH = path.join(__dirname, "faq_loja_mecanica.md");
 let FAQ_CONTENT = "";
 try {
     FAQ_CONTENT = fs.readFileSync(FAQ_PATH, "utf-8");
     console.log("FAQ carregada:", FAQ_CONTENT.length, "chars");
 } catch (e) {
-    console.warn("faq.md nao encontrado.");
+    console.warn("faq_loja_mecanica.md nao encontrado, tentando faq.md...");
+    try {
+        FAQ_CONTENT = fs.readFileSync(path.join(__dirname, "faq.md"), "utf-8");
+        console.log("faq.md carregada como fallback:", FAQ_CONTENT.length, "chars");
+    } catch (e2) {
+        console.warn("Nenhum arquivo FAQ encontrado.");
+    }
 }
 
 const SYSTEM_PROMPT = [
@@ -56,7 +63,7 @@ const SYSTEM_PROMPT = [
     "=== BASE DE CONHECIMENTO ===",
     FAQ_CONTENT || "(vazia - sempre faca handoff)",
     "=== FIM DA BASE ===",
-  ].join("\n");
+].join("\n");
 
 const cw = axios.create({
     baseURL: CHATWOOT_BASE_URL + "/api/v1/accounts/" + CHATWOOT_ACCOUNT_ID,
@@ -66,14 +73,62 @@ const cw = axios.create({
 
 async function sendMessage(convId, content, isPrivate = false) {
     return cw.post("/conversations/" + convId + "/messages", {
-          content,
-          message_type: "outgoing",
-          private: isPrivate,
+        content,
+        message_type: "outgoing",
+        private: isPrivate,
     });
 }
 
 async function toggleStatus(convId, status) {
     return cw.post("/conversations/" + convId + "/toggle_status", { status });
+}
+
+const OS_QUERY_KEYWORDS = [
+    "status", "situacao", "pronto", "quando fica", "quando vai ficar",
+    "cade", "onde esta", "meu equipamento", "minha ferramenta",
+    "minha rocadeira", "minha motosserra", "meu cortador",
+    "meu soprador", "ordem de servico", "minha os", "minha ordem",
+    "reparo", "conserto", "andamento", "previsao", "retirar", "buscar",
+    "prazo", "quanto tempo", "ta pronto", "esta pronto", "ficou pronto",
+];
+
+function isOsQuery(text) {
+    const t = (text || "").toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return OS_QUERY_KEYWORDS.some((k) => t.includes(k));
+}
+
+function extractOsNumber(text) {
+    const match = (text || "").match(/OS[-\s]?\d{4}[-\s]?\d{4}/i);
+    return match ? match[0].toUpperCase().replace(/\s/g, "") : null;
+}
+
+function extractPhone(text) {
+    const match = (text || "").match(
+        /(?:\+55|55)?\s*(?:\(?\d{2}\)?\s?)[\s-]?\d{4,5}[\s-]?\d{4}/
+    );
+    if (!match) return null;
+    return match[0].replace(/\D/g, "");
+}
+
+function getContactPhone(body) {
+    const phone =
+        body?.conversation?.meta?.sender?.phone_number ||
+        body?.conversation?.contact_inbox?.contact?.phone_number ||
+        "";
+    return phone.replace(/\D/g, "");
+}
+
+async function consultarStatusCRM(identifier, type = "telefone") {
+    try {
+        const url = `${OFICINA_CRM_URL}/api/chatbot/status?${type}=${encodeURIComponent(identifier)}`;
+        console.log(`[CRM] Consultando: ${url}`);
+        const response = await axios.get(url, { timeout: 10000 });
+        return response.data;
+    } catch (err) {
+        console.error("[CRM] Erro na consulta:", err.message);
+        return null;
+    }
 }
 
 function shouldHandoff(text) {
@@ -84,27 +139,30 @@ function shouldHandoff(text) {
 async function aiReply(history) {
     const messages = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
     const res = await openai.chat.completions.create({
-          model: OPENAI_MODEL,
-          messages,
-          temperature: 0.3,
-          max_tokens: 400,
+        model: OPENAI_MODEL,
+        messages,
+        temperature: 0.3,
+        max_tokens: 400,
     });
     const raw = res.choices?.[0]?.message?.content?.trim() || "";
     return {
-          text: raw.replace(/\[\[HANDOFF\]\]/g, "").trim(),
-          handoff: raw.includes("[[HANDOFF]]"),
+        text: raw.replace(/\[\[HANDOFF\]\]/g, "").trim(),
+        handoff: raw.includes("[[HANDOFF]]"),
     };
 }
 
 function buildHistory(payload) {
     const history = [];
     if (Array.isArray(payload?.conversation?.messages)) {
-          for (const m of payload.conversation.messages.slice(-10)) {
-                  if (!m.content) continue;
-                  history.push({ role: m.message_type === 0 ? "user" : "assistant", content: m.content });
-          }
+        for (const m of payload.conversation.messages.slice(-10)) {
+            if (!m.content) continue;
+            history.push({
+                role: m.message_type === 0 ? "user" : "assistant",
+                content: m.content,
+            });
+        }
     } else if (payload?.content) {
-          history.push({ role: "user", content: payload.content });
+        history.push({ role: "user", content: payload.content });
     }
     return history;
 }
@@ -112,49 +170,82 @@ function buildHistory(payload) {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-app.get("/", (_, res) => res.send("Chatwoot AI bot no ar."));
+app.get("/", (_, res) => res.send("Chatwoot AI Bot - Oficina CRM integrado."));
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
 app.post("/webhook", async (req, res) => {
     if (CHATWOOT_WEBHOOK_TOKEN) {
-          const t = req.headers["x-chatwoot-token"] || req.query.token;
-          if (t !== CHATWOOT_WEBHOOK_TOKEN) return res.status(401).json({ error: "invalid token" });
+        const t = req.headers["x-chatwoot-token"] || req.query.token;
+        if (t !== CHATWOOT_WEBHOOK_TOKEN)
+            return res.status(401).json({ error: "invalid token" });
     }
     res.status(200).json({ received: true });
 
-           const { event, message_type, private: isPrivate, content, conversation } = req.body || {};
+    const { event, message_type, private: isPrivate, content, conversation } =
+        req.body || {};
+
     try {
-          if (event !== "message_created") return;
-          if (message_type !== "incoming") return;
-          if (isPrivate) return;
+        if (event !== "message_created") return;
+        if (message_type !== "incoming") return;
+        if (isPrivate) return;
 
-      const conversationId = conversation?.id;
-          const userText = content || "";
-          if (!conversationId || !userText) return;
+        const conversationId = conversation?.id;
+        const userText = content || "";
+        if (!conversationId || !userText) return;
 
-      const assignee = conversation?.meta?.assignee;
-          if (assignee?.id) { console.log("Conversa", conversationId, "tem agente. Ignorando."); return; }
+        const assignee = conversation?.meta?.assignee;
+        if (assignee?.id) {
+            console.log("Conversa", conversationId, "tem agente. Ignorando.");
+            return;
+        }
 
-      if (shouldHandoff(userText)) {
-              await sendMessage(conversationId, "Vou te transferir para um atendente. Aguarde!");
-              await toggleStatus(conversationId, "open");
-              return;
-      }
+        if (shouldHandoff(userText)) {
+            await sendMessage(conversationId, "Vou te transferir para um atendente. Aguarde!");
+            await toggleStatus(conversationId, "open");
+            return;
+        }
 
-      if (!openai) {
-              await sendMessage(conversationId, "Ola! Nosso assistente esta sendo configurado. Transferindo para atendente.");
-              await toggleStatus(conversationId, "open");
-              return;
-      }
+        if (!openai) {
+            await sendMessage(
+                conversationId,
+                "Ola! Nosso assistente esta sendo configurado. Transferindo para atendente."
+            );
+            await toggleStatus(conversationId, "open");
+            return;
+        }
 
-      const { text, handoff } = await aiReply(buildHistory(req.body));
-          if (text) await sendMessage(conversationId, text);
-          if (handoff) {
-                  await sendMessage(conversationId, "Nota: bot solicitou handoff.", true);
-                  await toggleStatus(conversationId, "open");
-          }
+        if (isOsQuery(userText)) {
+            const osNumber = extractOsNumber(userText);
+            if (osNumber) {
+                const crm = await consultarStatusCRM(osNumber, "numero_os");
+                if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
+            }
+            const phoneFromMsg = extractPhone(userText);
+            if (phoneFromMsg) {
+                const crm = await consultarStatusCRM(phoneFromMsg, "telefone");
+                if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
+            }
+            const phoneFromContact = getContactPhone(req.body);
+            if (phoneFromContact) {
+                const crm = await consultarStatusCRM(phoneFromContact, "telefone");
+                if (crm) { await sendMessage(conversationId, crm.mensagem); return; }
+            }
+            await sendMessage(
+                conversationId,
+                "Para consultar o status do seu equipamento, me informe o numero da sua OS " +
+                "(ex: OS-2026-0001) ou o telefone cadastrado na oficina."
+            );
+            return;
+        }
+
+        const { text, handoff } = await aiReply(buildHistory(req.body));
+        if (text) await sendMessage(conversationId, text);
+        if (handoff) {
+            await sendMessage(conversationId, "Nota: bot solicitou handoff.", true);
+            await toggleStatus(conversationId, "open");
+        }
     } catch (err) {
-          console.error("Erro webhook:", err?.response?.data || err.message);
+        console.error("Erro webhook:", err?.response?.data || err.message);
     }
 });
 
